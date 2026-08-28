@@ -1,0 +1,133 @@
+<!-- index.html 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ocean Command — Interactive Attribution Map</title>
+  
+   SEO Meta Tags -->
+  <meta name="description" content="Interactive geospatial map overlaying satellite-detected oil spill boundaries with real-time AIS vessel telemetry and correlation filters.">
+  <meta name="keywords" content="ocean spill mapping, vessel correlation, maritime tracking, AIS map">
+  <meta name="author" content="Ocean Command Project">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+
+  <!-- Core Stylesheets -->
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/pages/map.css">
+</head>
+<body class="map-page-body">
+
+  <!-- Navigation -->
+  <nav class="nav" aria-label="Main Navigation">
+    <div class="nav__container container">
+      <a href="index.html" class="nav__logo-link">
+        <img src="img/logo.svg" alt="Ocean Command Logo" class="nav__logo-img">
+        <span>Ocean Command</span>
+      </a>
+      <button class="nav__toggle" aria-label="Toggle navigation menu" aria-expanded="false">
+        <span class="nav__toggle-bar"></span>
+        <span class="nav__toggle-bar"></span>
+        <span class="nav__toggle-bar"></span>
+      </button>
+      <div class="nav__menu">
+        <ul class="nav__list">
+          <li><a href="index.html" class="nav__link">Home</a></li>
+          <li><a href="detect.html" class="nav__link">Detect</a></li>
+          <li><a href="map.html" class="nav__link">Map</a></li>
+          <li><a href="report.html" class="nav__link">Report</a></li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Full Screen Map Container -->
+  <main class="map-wrapper" id="main-content">
+    <div id="fullscreen-map" class="fullscreen-map" aria-label="Interactive map displaying active spill and vessel tracks"></div>
+
+    <!-- Floating Glassmorphic Control Drawer -->
+    <section class="map-control" id="map-control-drawer" aria-label="Map Filter Panel">
+      <header class="map-control__header" id="map-drawer-header" aria-controls="map-drawer-body">
+        <div class="map-control__drag-handle"></div>
+        <h2 class="map-control__title h3">Attribution Controls</h2>
+        <span class="badge badge--success" id="vessel-count-summary" style="margin-top: 4px;">Loading...</span>
+      </header>
+      
+      <div class="map-control__body" id="map-drawer-body">
+        <!-- Distance Slider -->
+        <div class="form-group">
+          <div class="slider-header">
+            <label for="filter-dist" class="form-label">Attribution Distance</label>
+            <span class="slider-val" id="filter-dist-val">15.0 km</span>
+          </div>
+          <input type="range" id="filter-dist" class="map-slider" min="1.0" max="15.0" step="0.5" value="15.0" aria-valuemin="1.0" aria-valuemax="15.0" aria-valuenow="15.0">
+        </div>
+
+        <!-- Time Window Slider -->
+        <div class="form-group">
+          <div class="slider-header">
+            <label for="filter-time" class="form-label">AIS Correlation Window</label>
+            <span class="slider-val" id="filter-time-val">60 min</span>
+          </div>
+          <input type="range" id="filter-time" class="map-slider" min="5" max="60" step="5" value="60" aria-valuemin="5" aria-valuemax="60" aria-valuenow="60">
+        </div>
+        
+        <!-- Layer Toggles -->
+        <fieldset style="border: none; margin: 0; padding: 0;">
+          <legend class="h4" style="margin-top: var(--spacing-lg); margin-bottom: var(--spacing-sm); float: left; width: 100%;">
+            Visible Layers
+          </legend>
+          <div class="layer-toggle">
+            <label for="toggle-spill" class="form-label" style="margin-bottom: 0; font-weight: normal;">Spill Outline Polygon</label>
+            <label class="switch">
+              <input type="checkbox" id="toggle-spill" checked>
+              <span class="slider-switch"></span>
+            </label>
+          </div>
+          <div class="layer-toggle">
+            <label for="toggle-vessels" class="form-label" style="margin-bottom: 0; font-weight: normal;">Attributed Vessels</label>
+            <label class="switch">
+              <input type="checkbox" id="toggle-vessels" checked>
+              <span class="slider-switch"></span>
+            </label>
+          </div>
+          <div class="layer-toggle">
+            <label for="toggle-tracks" class="form-label" style="margin-bottom: 0; font-weight: normal;">Historical Vessel Tracks</label>
+            <label class="switch">
+              <input type="checkbox" id="toggle-tracks" checked>
+              <span class="slider-switch"></span>
+            </label>
+          </div>
+        </fieldset>
+      </div>
+    </section>
+  </main>
+
+  <!-- Dummy Hidden Footer for styling validation (hidden via css) -->
+  <footer class="footer">
+    <div class="footer__container container">
+      <p>&copy; 2026 Ocean Command Inc. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <!-- Leaflet JS CDN -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" 
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- Scripts -->
+  <script src="js/api.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/map.js"></script>
+</body>
+</html> 
+
+-->
