@@ -1,0 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.13.0+cu126
+torchvision==0.28.0+cu126
+fastapi==0.141.1
+uvicorn==0.52.4
+pillow==12.3.0
+python-multipart==0.0.32
+pydantic==2.13.4
+starlette==1.6.0
+requests==2.34.2
