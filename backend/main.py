@@ -5,6 +5,7 @@ import sys
 import asyncio
 import datetime
 import time
+import requests
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 from dateutil import parser as date_parser
@@ -101,6 +102,26 @@ def _binary_classifier_status() -> Dict[str, Any]:
         return {"status": "ready", "message": "Binary classifier loaded via inference module."}
 
 
+def _supabase_status() -> str:
+    url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if not url or not key:
+        return "unconfigured"
+    try:
+        response = requests.get(
+            f"{url}/rest/v1/",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            timeout=5,
+        )
+        if response.status_code < 300:
+            return "connected"
+        if response.status_code in {401, 403}:
+            return "authentication_error"
+        return "unavailable"
+    except requests.RequestException:
+        return "unavailable"
+
+
 @app.get("/api/health")
 def api_health():
     return {
@@ -109,7 +130,8 @@ def api_health():
         "backend": "FastAPI",
         "classifier": _binary_classifier_status(),
         "models": MODEL_STATUS,
-        "supabase": "configured" if os.getenv("SUPABASE_SERVICE_ROLE_KEY") else "unconfigured",
+        "supabase": _supabase_status(),
+        "external_api": "configured" if external_api_service.configured else "unconfigured",
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
     }
 
@@ -243,15 +265,23 @@ def get_external_data(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    query = db.query(ExternalDataRecord).order_by(desc(ExternalDataRecord.created_at))
-    if detection_id:
-        query = query.filter(ExternalDataRecord.detection_id == detection_id)
-    return {"external_data": [_external_record_response(record) for record in query.limit(limit).all()]}
+    try:
+        query = db.query(ExternalDataRecord).order_by(desc(ExternalDataRecord.created_at))
+        if detection_id:
+            query = query.filter(ExternalDataRecord.detection_id == detection_id)
+        return {"external_data": [_external_record_response(record) for record in query.limit(limit).all()]}
+    except SQLAlchemyError:
+        db.rollback()
+        return {"external_data": []}
 
 
 @app.get("/api/external-data/{record_id}")
 def get_external_data_record(record_id: int, db: Session = Depends(get_db)):
-    record = db.query(ExternalDataRecord).filter(ExternalDataRecord.id == record_id).first()
+    try:
+        record = db.query(ExternalDataRecord).filter(ExternalDataRecord.id == record_id).first()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="External data record not found.")
     if not record:
         raise HTTPException(status_code=404, detail="External data record not found.")
     return _external_record_response(record)
@@ -373,6 +403,8 @@ async def api_run_detection(
             "image": {"original_url": f"/uploads/{os.path.basename(saved_path)}"},
             "created_at": datetime.datetime.utcnow().isoformat() + "Z",
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Detection pipeline failed: {str(exc)}") from exc
 
