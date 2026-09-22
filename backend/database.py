@@ -9,8 +9,8 @@ from sqlalchemy.orm import sessionmaker, relationship
 # Load .env configuration
 def _load_env():
     env_paths = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
     ]
     for env_path in env_paths:
         if os.path.exists(env_path):
@@ -162,6 +162,18 @@ class VesselAttribution(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     spill = relationship("OilSpill", back_populates="attributions")
+
+
+class ExternalDataRecord(Base):
+    __tablename__ = "external_api_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    detection_id = Column(String(100), index=True, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    status = Column(String(30), nullable=False, default="unavailable")
+    data_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 def init_db():
     Base.metadata.create_all(bind=engine)

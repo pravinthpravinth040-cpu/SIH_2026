@@ -1,9 +1,13 @@
 import io
 import json
+from pathlib import Path
 from fastapi.testclient import TestClient
 from main import app
 from database import get_db, init_db
 from sample_data import seed_initial_datasets_if_empty
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+MODEL_SAMPLE = BASE_DIR / "binary classification-20260916T134200Z-1-001" / "binary classification" / "model_service_handoff" / "sample_images" / "oil_sample_1.jpg"
 
 client = TestClient(app)
 
@@ -114,6 +118,34 @@ def test_upload_ais_csv():
     assert res["record_count"] == 3
     print("  -> Passed AIS CSV ingestion test.")
 
+def test_health_and_detection_routes():
+    print("Testing /api/health and detection endpoints...")
+    health = client.get("/api/health")
+    assert health.status_code == 200
+    assert health.json()["status"] == "healthy"
+
+    assert MODEL_SAMPLE.exists(), f"Missing model sample image: {MODEL_SAMPLE}"
+    with MODEL_SAMPLE.open("rb") as f:
+        classify_response = client.post("/api/detection/classify", files={"file": (MODEL_SAMPLE.name, f.read(), "image/jpeg")})
+    assert classify_response.status_code == 200, classify_response.text
+    classify_data = classify_response.json()
+    assert "is_oil_spill" in classify_data
+    assert "confidence" in classify_data
+
+    with MODEL_SAMPLE.open("rb") as f:
+        segment_response = client.post("/api/detection/segment", files={"file": (MODEL_SAMPLE.name, f.read(), "image/jpeg")})
+    assert segment_response.status_code == 200, segment_response.text
+    segment_data = segment_response.json()
+    assert "mask_url" in segment_data or "warning" in segment_data
+
+    with MODEL_SAMPLE.open("rb") as f:
+        run_response = client.post("/api/detection/run", files={"file": (MODEL_SAMPLE.name, f.read(), "image/jpeg")})
+    assert run_response.status_code == 200, run_response.text
+    run_data = run_response.json()
+    assert run_data["status"] in {"completed", "processed", "completed_with_warnings"}
+    assert "classification" in run_data
+    print("  -> Passed health and detection pipeline routes test.")
+
 def test_api_gateway_and_v1_endpoints():
     print("Testing API Gateway /api/v1/ endpoints...")
     # Test v1 spills
@@ -173,7 +205,8 @@ if __name__ == "__main__":
     test_history_filtering()
     test_upload_satellite()
     test_upload_ais_csv()
+    test_health_and_detection_routes()
     test_api_gateway_and_v1_endpoints()
     test_webhooks_and_orchestrator()
-    print("\n>>> ALL 9 BACKEND & ARCHITECTURE TEST CASES PASSED PERFECTLY! <<<\n")
+    print("\n>>> ALL 10 BACKEND & ARCHITECTURE TEST CASES PASSED PERFECTLY! <<<\n")
 

@@ -1,8 +1,10 @@
 import os
 import io
 import json
+import sys
 import asyncio
 import datetime
+from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 from dateutil import parser as date_parser
 
@@ -15,7 +17,7 @@ from sqlalchemy import desc, func
 
 from database import (
     init_db, get_db,
-    SatelliteDataset, AISDataset, AISRecord, OilSpill, VesselAttribution
+    SatelliteDataset, AISDataset, AISRecord, OilSpill, VesselAttribution, ExternalDataRecord
 )
 from sample_data import seed_initial_datasets_if_empty
 from satellite_processor import process_satellite_image
@@ -25,6 +27,23 @@ from attribution_engine import calculate_vessel_attribution
 from external_apis import satellite_api, ais_api, environmental_api
 from webhook_manager import webhook_manager
 from agent_orchestrator import agent_orchestrator
+from dotenv import load_dotenv
+from api_service import ExternalAPIError, external_api_service
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_DIR / ".env")
+
+MODEL_SERVICE_DIR = ROOT_DIR / "binary classification-20260916T134200Z-1-001" / "binary classification" / "model_service_handoff"
+SEGMENT_SERVICE_DIR = ROOT_DIR / "segmentation model-20260916T135617Z-1-001" / "segmentation model" / "model_service_handoff"
+for service_dir in [str(MODEL_SERVICE_DIR), str(SEGMENT_SERVICE_DIR)]:
+    if os.path.isdir(service_dir) and service_dir not in sys.path:
+        sys.path.insert(0, service_dir)
+
+try:
+    from inference import predict as binary_predict, load_inference_model as load_binary_model
+except Exception:
+    binary_predict = None
+    load_binary_model = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -36,6 +55,291 @@ app = FastAPI(
     description="Backend API for Sentinel-1 SAR Oil Spill Detection and AIS Vessel Attribution",
     version="1.0.0"
 )
+
+
+def _safe_json_loads(raw_value: Optional[str]) -> Any:
+    if not raw_value:
+        return {}
+    try:
+        return json.loads(raw_value)
+    except (TypeError, ValueError):
+        return raw_value
+
+
+def _ensure_valid_image_bytes(file_name: str, content_type: Optional[str], contents: bytes, max_mb: int = 15) -> None:
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
+    if len(contents) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"Image exceeds the {max_mb}MB upload limit.")
+    allowed_exts = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+    lower_name = (file_name or "").lower()
+    valid_type = bool(content_type and content_type.startswith("image/")) or any(lower_name.endswith(ext) for ext in allowed_exts)
+    if not valid_type:
+        raise HTTPException(status_code=400, detail="Unsupported image format. Use JPG, PNG, BMP, TIFF, or GeoTIFF-compatible input.")
+
+
+def _binary_classifier_status() -> Dict[str, Any]:
+    if binary_predict is None:
+        return {"status": "unavailable", "message": "Binary classification model is not available in the current environment."}
+    try:
+        return {"status": "ready", "checkpoint": str(MODEL_SERVICE_DIR / "checkpoints" / "best_model.pth")}
+    except Exception:
+        return {"status": "ready", "message": "Binary classifier loaded via inference module."}
+
+
+def _segmentation_model_status() -> Dict[str, Any]:
+    return {
+        "status": "error",
+        "message": (
+            "The supplied segmentation handoff contains a duplicate binary ResNet18 classifier "
+            "and does not provide a segmentation architecture or mask output."
+        ),
+        "checkpoint": str(SEGMENT_SERVICE_DIR / "checkpoints" / "best_model.pth"),
+    }
+
+
+@app.get("/api/health")
+def api_health():
+    binary_status = _binary_classifier_status()
+    segmentation_status = _segmentation_model_status()
+    return {
+        "status": "healthy" if binary_status["status"] == "ready" and segmentation_status["status"] == "ready" else "degraded",
+        "backend": "ok",
+        "service": "OceanGuard API",
+        "backend": "FastAPI",
+        "classifier": binary_status,
+        "segmentation": segmentation_status,
+        "models": "error" if segmentation_status["status"] == "error" else "ready",
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _save_external_data(
+    db: Session,
+    *,
+    detection_id: str,
+    latitude: Optional[float],
+    longitude: Optional[float],
+) -> Dict[str, Any]:
+    cached = None
+    if latitude is not None and longitude is not None:
+        cache_since = datetime.datetime.utcnow() - datetime.timedelta(minutes=10)
+        cached = db.query(ExternalDataRecord).filter(
+            ExternalDataRecord.latitude == latitude,
+            ExternalDataRecord.longitude == longitude,
+            ExternalDataRecord.status == "available",
+            ExternalDataRecord.created_at >= cache_since,
+        ).order_by(desc(ExternalDataRecord.created_at)).first()
+    if cached:
+        return {
+            "id": cached.id,
+            "status": cached.status,
+            "data": _safe_json_loads(cached.data_json) if cached.data_json else None,
+            "cached": True,
+        }
+
+    if latitude is None or longitude is None:
+        result = {"status": "unavailable", "reason": "Location is not available for this detection."}
+    else:
+        try:
+            result = external_api_service.fetch_location_data(
+                latitude=latitude,
+                longitude=longitude,
+            )
+        except ExternalAPIError as exc:
+            result = {"status": "unavailable", "reason": str(exc)}
+
+    record = ExternalDataRecord(
+        detection_id=detection_id,
+        latitude=latitude,
+        longitude=longitude,
+        status=result.get("status", "unavailable"),
+        data_json=json.dumps(result.get("data")) if result.get("data") is not None else None,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return {
+        "id": record.id,
+        "status": record.status,
+        "data": result.get("data") if record.status == "available" else None,
+    }
+
+
+def _external_record_response(record: ExternalDataRecord) -> Dict[str, Any]:
+    return {
+        "id": record.id,
+        "detection_id": record.detection_id,
+        "latitude": record.latitude,
+        "longitude": record.longitude,
+        "status": record.status,
+        "data": _safe_json_loads(record.data_json) if record.data_json else None,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+    }
+
+
+@app.get("/api/detections")
+def get_detections(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
+    spills = db.query(OilSpill).order_by(desc(OilSpill.created_at)).limit(limit).all()
+    return {"detections": [{
+        "id": spill.spill_id,
+        "spill_id": spill.spill_id,
+        "latitude": spill.lat,
+        "longitude": spill.lon,
+        "classification": "oil_spill",
+        "confidence": spill.confidence,
+        "spill_area": spill.area_km2,
+        "severity": spill.severity,
+        "mask_url": spill.mask_url,
+        "image_url": spill.image_url,
+        "created_at": spill.created_at.isoformat() if spill.created_at else None,
+    } for spill in spills]}
+
+
+@app.get("/api/detections/{detection_id}")
+def get_detection(detection_id: str, db: Session = Depends(get_db)):
+    spill = db.query(OilSpill).filter(OilSpill.spill_id == detection_id).first()
+    if not spill:
+        raise HTTPException(status_code=404, detail="Detection not found.")
+    return {
+        "id": spill.spill_id,
+        "spill_id": spill.spill_id,
+        "latitude": spill.lat,
+        "longitude": spill.lon,
+        "classification": "oil_spill",
+        "confidence": spill.confidence,
+        "spill_area": spill.area_km2,
+        "severity": spill.severity,
+        "mask_url": spill.mask_url,
+        "image_url": spill.image_url,
+        "created_at": spill.created_at.isoformat() if spill.created_at else None,
+    }
+
+
+@app.get("/api/external-data")
+def get_external_data(
+    detection_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    query = db.query(ExternalDataRecord).order_by(desc(ExternalDataRecord.created_at))
+    if detection_id:
+        query = query.filter(ExternalDataRecord.detection_id == detection_id)
+    return {"external_data": [_external_record_response(record) for record in query.limit(limit).all()]}
+
+
+@app.get("/api/external-data/{record_id}")
+def get_external_data_record(record_id: int, db: Session = Depends(get_db)):
+    record = db.query(ExternalDataRecord).filter(ExternalDataRecord.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="External data record not found.")
+    return _external_record_response(record)
+
+
+@app.post("/api/detection/classify")
+async def api_classify_detection(file: UploadFile = File(...)):
+    if binary_predict is None:
+        raise HTTPException(status_code=500, detail="Binary classification model is unavailable on this backend instance.")
+
+    contents = await file.read()
+    _ensure_valid_image_bytes(file.filename or "uploaded_image", file.content_type, contents)
+
+    try:
+        result = binary_predict(contents)
+        label = "oil_spill" if bool(result.get("oil_detected")) else "no_oil_spill"
+        return {
+            "is_oil_spill": bool(result.get("oil_detected", False)),
+            "classification": label,
+            "confidence": float(result.get("confidence", 0.0)),
+            "raw_score": float(result.get("raw_score", 0.0)),
+            "filename": file.filename,
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=f"Model file missing: {str(exc)}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Classification failed: {str(exc)}") from exc
+
+
+@app.post("/api/detection/segment")
+async def api_segment_detection(file: UploadFile = File(...), lat: Optional[float] = Form(None), lon: Optional[float] = Form(None)):
+    raise HTTPException(
+        status_code=503,
+        detail="Segmentation model unavailable: the supplied handoff has no segmentation model or mask output.",
+    )
+
+
+async def _unreachable_segment_detection(file: UploadFile = File(...), lat: Optional[float] = Form(None), lon: Optional[float] = Form(None)):
+    contents = await file.read()
+    _ensure_valid_image_bytes(file.filename or "uploaded_image", file.content_type, contents)
+
+    try:
+        proc = process_satellite_image(
+            image_bytes=contents,
+            filename=file.filename or "uploaded_image.png",
+            target_dir=UPLOADS_DIR,
+            base_lat=lat,
+            base_lon=lon,
+            is_real_sample=False,
+        )
+        bbox = json.loads(proc.get("bounding_box_json") or "{}") if proc.get("bounding_box_json") else {}
+        return {
+            "spill_id": proc.get("spill_id"),
+            "mask_url": proc.get("mask_url"),
+            "spill_area": float(proc.get("area_km2", 0.0)),
+            "bounding_box": bbox,
+            "confidence": float(proc.get("confidence", 0.0)),
+            "polygon": _safe_json_loads(proc.get("polygon_geojson")),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Segmentation failed: {str(exc)}") from exc
+
+
+@app.post("/api/detection/run")
+async def api_run_detection(
+    file: UploadFile = File(...),
+    lat: Optional[float] = Form(None),
+    lon: Optional[float] = Form(None),
+    db: Session = Depends(get_db),
+):
+    contents = await file.read()
+    _ensure_valid_image_bytes(file.filename or "uploaded_image", file.content_type, contents)
+
+    try:
+        classification = binary_predict(contents) if binary_predict is not None else {"oil_detected": False, "confidence": 0.0, "raw_score": 0.0}
+        detected = bool(classification.get("oil_detected", False))
+        segmentation = {"detected": False, "spill_area": 0.0, "mask_url": None, "overlay_url": None, "bounding_box": {}}
+        if detected:
+            raise HTTPException(
+                status_code=503,
+                detail="Oil spill classified, but segmentation cannot run because the supplied segmentation model is invalid.",
+            )
+
+        detection_id = f"DET-{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+        external_api = _save_external_data(
+            db,
+            detection_id=detection_id,
+            latitude=lat,
+            longitude=lon,
+        )
+        saved_original_name = file.filename or "uploaded_image.png"
+        saved_path = os.path.join(UPLOADS_DIR, f"original_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{saved_original_name}")
+        with open(saved_path, "wb") as fh:
+            fh.write(contents)
+
+        return {
+            "detection_id": detection_id,
+            "status": "completed",
+            "classification": {
+                "label": "oil_spill" if detected else "no_oil_spill",
+                "confidence": float(classification.get("confidence", 0.0)),
+            },
+            "segmentation": segmentation,
+            "external_api": external_api,
+            "image": {"original_url": f"/uploads/{os.path.basename(saved_path)}"},
+            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Detection pipeline failed: {str(exc)}") from exc
 
 
 # ==============================================================================
@@ -111,12 +415,14 @@ def get_index():
 
 @app.on_event("startup")
 def startup_event():
-    init_db()
-    db = next(get_db())
-    try:
-        seed_initial_datasets_if_empty(db)
-    finally:
-        db.close()
+    database_url = os.getenv("DATABASE_URL", "")
+    if database_url.startswith("sqlite"):
+        init_db()
+        db = next(get_db())
+        try:
+            seed_initial_datasets_if_empty(db)
+        finally:
+            db.close()
 
 
 # ==============================================================================
@@ -472,6 +778,13 @@ async def upload_satellite_image(
     db.add(spill)
     db.commit()
 
+    external_api_result = _save_external_data(
+        db,
+        detection_id=proc_result["spill_id"],
+        latitude=proc_result["lat"],
+        longitude=proc_result["lon"],
+    )
+
     # 4. Search existing AIS records or generate synthetic AIS fallback around coordinates
     spill_time = datetime.datetime.utcnow()
     existing_ais_records = db.query(AISRecord).all()
@@ -637,6 +950,7 @@ async def upload_satellite_image(
         "weather_info": json.loads(proc_result["weather_info_json"]),
         "prediction": json.loads(proc_result["prediction_json"]),
         "attributed_vessels": attributed_list,
+        "external_api": external_api_result,
         "data_label": proc_result["data_label"]
     }
 
