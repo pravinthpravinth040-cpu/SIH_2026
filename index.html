@@ -5209,24 +5209,30 @@ Loading official MarineCadastre AccessAIS report from backend...
 
             const formData = new FormData();
             formData.append("file", file);
-            formData.append("dataset_name", `Sentinel-1 Ingestion (${file.name})`);
 
             try {
-                const res = await fetch(`${API_BASE}/upload/satellite`, {
+                const res = await fetch(`${API_BASE}/detection/run`, {
                     method: "POST",
                     body: formData
                 });
 
-                if (!res.ok) throw new Error("Satellite upload failed");
+                if (!res.ok) {
+                    const error = await res.json().catch(() => ({}));
+                    throw new Error(error.detail || "Satellite analysis failed");
+                }
                 const result = await res.json();
 
                 // Refresh live state
                 await checkBackendAndLoadAll();
-                goToPage("map");
-                showToast(`Spill ${result.spill_id} detected! Attributed ${result.attributed_vessels.length} nearby vessels.`);
+                if (result.classification.label === "oil_spill") {
+                    goToPage("map");
+                    showToast(`Oil spill detected (${(result.classification.confidence * 100).toFixed(1)}% confidence).`);
+                } else {
+                    showToast(`Clean ocean classified (${(result.classification.confidence * 100).toFixed(1)}% confidence).`);
+                }
             } catch (err) {
                 console.error("Upload error:", err);
-                showToast("Error processing satellite image on backend.");
+                showToast(err.message || "Error processing satellite image on backend.");
             }
         }
 

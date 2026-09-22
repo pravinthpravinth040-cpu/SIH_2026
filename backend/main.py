@@ -4,6 +4,7 @@ import json
 import sys
 import asyncio
 import datetime
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 from dateutil import parser as date_parser
@@ -14,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
+from sqlalchemy.exc import SQLAlchemyError
 
 from database import (
     init_db, get_db,
@@ -29,21 +31,30 @@ from webhook_manager import webhook_manager
 from agent_orchestrator import agent_orchestrator
 from dotenv import load_dotenv
 from api_service import ExternalAPIError, external_api_service
+from model_runtime import ModelRuntimeError, load_model_runtimes
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
 
 MODEL_SERVICE_DIR = ROOT_DIR / "binary classification-20260916T134200Z-1-001" / "binary classification" / "model_service_handoff"
 SEGMENT_SERVICE_DIR = ROOT_DIR / "segmentation model-20260916T135617Z-1-001" / "segmentation model" / "model_service_handoff"
-for service_dir in [str(MODEL_SERVICE_DIR), str(SEGMENT_SERVICE_DIR)]:
-    if os.path.isdir(service_dir) and service_dir not in sys.path:
-        sys.path.insert(0, service_dir)
-
+binary_runtime = None
+segmentation_runtime = None
+MODEL_STATUS = {
+    "binary": "error",
+    "segmentation": "error",
+    "segmentation_message": "Models have not been loaded.",
+}
 try:
-    from inference import predict as binary_predict, load_inference_model as load_binary_model
-except Exception:
+    binary_runtime, segmentation_runtime, MODEL_STATUS = load_model_runtimes(
+        MODEL_SERVICE_DIR,
+        SEGMENT_SERVICE_DIR,
+    )
+    binary_predict = binary_runtime.predict
+except (Exception, ModelRuntimeError) as exc:
     binary_predict = None
-    load_binary_model = None
+    MODEL_STATUS["binary"] = "error"
+    MODEL_STATUS["binary_message"] = str(exc)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -82,34 +93,23 @@ def _binary_classifier_status() -> Dict[str, Any]:
     if binary_predict is None:
         return {"status": "unavailable", "message": "Binary classification model is not available in the current environment."}
     try:
-        return {"status": "ready", "checkpoint": str(MODEL_SERVICE_DIR / "checkpoints" / "best_model.pth")}
+        return {
+            "status": MODEL_STATUS.get("binary", "error"),
+            "checkpoint": str(MODEL_SERVICE_DIR / "checkpoints" / "best_model.pth"),
+        }
     except Exception:
         return {"status": "ready", "message": "Binary classifier loaded via inference module."}
 
 
-def _segmentation_model_status() -> Dict[str, Any]:
-    return {
-        "status": "error",
-        "message": (
-            "The supplied segmentation handoff contains a duplicate binary ResNet18 classifier "
-            "and does not provide a segmentation architecture or mask output."
-        ),
-        "checkpoint": str(SEGMENT_SERVICE_DIR / "checkpoints" / "best_model.pth"),
-    }
-
-
 @app.get("/api/health")
 def api_health():
-    binary_status = _binary_classifier_status()
-    segmentation_status = _segmentation_model_status()
     return {
-        "status": "healthy" if binary_status["status"] == "ready" and segmentation_status["status"] == "ready" else "degraded",
-        "backend": "ok",
+        "status": "healthy" if MODEL_STATUS.get("binary") == "ready" else "degraded",
         "service": "OceanGuard API",
         "backend": "FastAPI",
-        "classifier": binary_status,
-        "segmentation": segmentation_status,
-        "models": "error" if segmentation_status["status"] == "error" else "ready",
+        "classifier": _binary_classifier_status(),
+        "models": MODEL_STATUS,
+        "supabase": "configured" if os.getenv("SUPABASE_SERVICE_ROLE_KEY") else "unconfigured",
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
     }
 
@@ -124,12 +124,15 @@ def _save_external_data(
     cached = None
     if latitude is not None and longitude is not None:
         cache_since = datetime.datetime.utcnow() - datetime.timedelta(minutes=10)
-        cached = db.query(ExternalDataRecord).filter(
-            ExternalDataRecord.latitude == latitude,
-            ExternalDataRecord.longitude == longitude,
-            ExternalDataRecord.status == "available",
-            ExternalDataRecord.created_at >= cache_since,
-        ).order_by(desc(ExternalDataRecord.created_at)).first()
+        try:
+            cached = db.query(ExternalDataRecord).filter(
+                ExternalDataRecord.latitude == latitude,
+                ExternalDataRecord.longitude == longitude,
+                ExternalDataRecord.status == "available",
+                ExternalDataRecord.created_at >= cache_since,
+            ).order_by(desc(ExternalDataRecord.created_at)).first()
+        except SQLAlchemyError:
+            db.rollback()
     if cached:
         return {
             "id": cached.id,
@@ -149,6 +152,14 @@ def _save_external_data(
         except ExternalAPIError as exc:
             result = {"status": "unavailable", "reason": str(exc)}
 
+    if result.get("status") != "available":
+        return {
+            "id": None,
+            "status": "unavailable",
+            "data": None,
+            "stored": False,
+        }
+
     record = ExternalDataRecord(
         detection_id=detection_id,
         latitude=latitude,
@@ -156,13 +167,23 @@ def _save_external_data(
         status=result.get("status", "unavailable"),
         data_json=json.dumps(result.get("data")) if result.get("data") is not None else None,
     )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
+    try:
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+    except SQLAlchemyError:
+        db.rollback()
+        return {
+            "id": None,
+            "status": result.get("status", "unavailable"),
+            "data": result.get("data") if result.get("status") == "available" else None,
+            "stored": False,
+        }
     return {
         "id": record.id,
         "status": record.status,
         "data": result.get("data") if record.status == "available" else None,
+        "stored": True,
     }
 
 
@@ -262,13 +283,6 @@ async def api_classify_detection(file: UploadFile = File(...)):
 
 @app.post("/api/detection/segment")
 async def api_segment_detection(file: UploadFile = File(...), lat: Optional[float] = Form(None), lon: Optional[float] = Form(None)):
-    raise HTTPException(
-        status_code=503,
-        detail="Segmentation model unavailable: the supplied handoff has no segmentation model or mask output.",
-    )
-
-
-async def _unreachable_segment_detection(file: UploadFile = File(...), lat: Optional[float] = Form(None), lon: Optional[float] = Form(None)):
     contents = await file.read()
     _ensure_valid_image_bytes(file.filename or "uploaded_image", file.content_type, contents)
 
@@ -304,15 +318,34 @@ async def api_run_detection(
     contents = await file.read()
     _ensure_valid_image_bytes(file.filename or "uploaded_image", file.content_type, contents)
 
+    started_at = time.perf_counter()
     try:
+        if binary_predict is None:
+            raise HTTPException(status_code=503, detail="Binary classification model is unavailable.")
         classification = binary_predict(contents) if binary_predict is not None else {"oil_detected": False, "confidence": 0.0, "raw_score": 0.0}
         detected = bool(classification.get("oil_detected", False))
         segmentation = {"detected": False, "spill_area": 0.0, "mask_url": None, "overlay_url": None, "bounding_box": {}}
         if detected:
-            raise HTTPException(
-                status_code=503,
-                detail="Oil spill classified, but segmentation cannot run because the supplied segmentation model is invalid.",
+            if MODEL_STATUS.get("segmentation") != "ready":
+                raise HTTPException(
+                    status_code=503,
+                    detail=MODEL_STATUS.get("segmentation_message", "Segmentation model is unavailable."),
+                )
+            proc = process_satellite_image(
+                image_bytes=contents,
+                filename=file.filename or "uploaded_image.png",
+                target_dir=UPLOADS_DIR,
+                base_lat=lat,
+                base_lon=lon,
+                is_real_sample=False,
             )
+            segmentation = {
+                "detected": True,
+                "spill_area": float(proc.get("area_km2", 0.0)),
+                "mask_url": proc.get("mask_url"),
+                "overlay_url": proc.get("mask_url"),
+                "bounding_box": json.loads(proc.get("bounding_box_json") or "{}") if proc.get("bounding_box_json") else {},
+            }
 
         detection_id = f"DET-{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
         external_api = _save_external_data(
@@ -332,9 +365,11 @@ async def api_run_detection(
             "classification": {
                 "label": "oil_spill" if detected else "no_oil_spill",
                 "confidence": float(classification.get("confidence", 0.0)),
+                "raw_probability": float(classification.get("raw_score", 0.0)),
             },
             "segmentation": segmentation,
             "external_api": external_api,
+            "processing_time_seconds": round(time.perf_counter() - started_at, 3),
             "image": {"original_url": f"/uploads/{os.path.basename(saved_path)}"},
             "created_at": datetime.datetime.utcnow().isoformat() + "Z",
         }
