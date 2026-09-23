@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from database import (
@@ -122,6 +122,7 @@ def _supabase_status() -> str:
         return "unavailable"
 
 
+@app.get("/health")
 @app.get("/api/health")
 def api_health():
     return {
@@ -630,9 +631,31 @@ def _get_live_stats(db: Session) -> Dict[str, Any]:
 @app.get("/api/dashboard/statistics")
 def get_dashboard_statistics(db: Session = Depends(get_db)):
     """Returns aggregated real-time monitoring and detection statistics."""
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        db.rollback()
+        return {
+            "status": "degraded",
+            "database": "unavailable",
+            "total_satellite_images": 0,
+            "total_spills_detected": 0,
+            "total_clean_scans": 0,
+            "total_ais_vessels_analyzed": 0,
+            "total_historical_cases": 0,
+            "high_confidence_attributions": 0,
+            "recent_detections": [],
+            "recent_ais_activity": [],
+            "active_spill": None,
+        }
     total_images = db.query(SatelliteDataset).count()
     total_spills = db.query(OilSpill).count()
     total_vessels = db.query(AISRecord.mmsi).distinct().count()
+    total_clean_scans = 0
+    for dataset in db.query(SatelliteDataset).all():
+        metadata = _safe_json_loads(dataset.metadata_json)
+        if isinstance(metadata, dict) and metadata.get("classification") == "no_oil_spill":
+            total_clean_scans += 1
     total_history = total_spills
     high_confidence_attributions = db.query(VesselAttribution).filter(VesselAttribution.attribution_score >= 80.0).count()
 
@@ -728,7 +751,8 @@ def get_dashboard_statistics(db: Session = Depends(get_db)):
         "status": "online",
         "total_satellite_images": total_images,
         "total_spills_detected": total_spills,
-        "total_ais_vessels_analyzed": max(total_vessels, 12),
+        "total_ais_vessels_analyzed": total_vessels,
+        "total_clean_scans": total_clean_scans,
         "total_historical_cases": total_history,
         "high_confidence_attributions": high_confidence_attributions,
         "recent_detections": recent_detections,
@@ -779,6 +803,119 @@ async def upload_satellite_image(
     content = await file.read()
     filename = file.filename or "uploaded_image.png"
     name = dataset_name or f"Uploaded Satellite Scene ({filename})"
+
+    _ensure_valid_image_bytes(filename, file.content_type, content)
+    if binary_predict is None:
+        raise HTTPException(status_code=503, detail="Binary classification model is unavailable.")
+
+    try:
+        classification = binary_predict(content)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Binary classification failed.") from exc
+
+    detected = bool(classification.get("oil_detected", False))
+    if not detected:
+        saved_filename = f"clean_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}_{filename}"
+        saved_path = os.path.join(UPLOADS_DIR, saved_filename)
+        with open(saved_path, "wb") as fh:
+            fh.write(content)
+
+        sat_ds = SatelliteDataset(
+            name=name,
+            dataset_type="Uploaded Satellite Image",
+            source="Direct User Ingestion (FastAPI)",
+            image_id=f"IMG-CLEAN-{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
+            file_path=f"/uploads/{saved_filename}",
+            preview_url=f"/uploads/{saved_filename}",
+            record_count=1,
+            acquisition_date=datetime.datetime.utcnow(),
+            center_lat=lat or 0.0,
+            center_lon=lon or 0.0,
+            geographic_coverage="Ungeolocated SAR scene" if lat is None or lon is None else f"{lat:.4f}, {lon:.4f}",
+            processing_status="Completed",
+            is_real_data=True,
+            data_label="REAL DATA (CLASSIFIED)",
+            metadata_json=json.dumps({
+                "filename": filename,
+                "size_bytes": len(content),
+                "classification": "no_oil_spill",
+                "confidence": float(classification.get("confidence", 0.0)),
+                "raw_probability": float(classification.get("raw_score", 0.0)),
+            }),
+        )
+        db.add(sat_ds)
+        db.commit()
+        db.refresh(sat_ds)
+        return {
+            "success": True,
+            "status": "completed",
+            "classification": {
+                "label": "no_oil_spill",
+                "confidence": float(classification.get("confidence", 0.0)),
+                "raw_probability": float(classification.get("raw_score", 0.0)),
+            },
+            "segmentation": {"status": "not_run", "reason": "Binary classifier found no oil spill."},
+            "scan": {
+                "dataset_id": sat_ds.id,
+                "filename": filename,
+                "image_url": f"/uploads/{saved_filename}",
+                "size_bytes": len(content),
+            },
+            "processing_time_seconds": None,
+        }
+
+    if MODEL_STATUS.get("segmentation") != "ready":
+        saved_filename = f"classified_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}_{filename}"
+        saved_path = os.path.join(UPLOADS_DIR, saved_filename)
+        with open(saved_path, "wb") as fh:
+            fh.write(content)
+        sat_ds = SatelliteDataset(
+            name=name,
+            dataset_type="Uploaded Satellite Image",
+            source="Direct User Ingestion (FastAPI)",
+            image_id=f"IMG-CLASSIFIED-{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
+            file_path=f"/uploads/{saved_filename}",
+            preview_url=f"/uploads/{saved_filename}",
+            record_count=1,
+            acquisition_date=datetime.datetime.utcnow(),
+            center_lat=lat or 0.0,
+            center_lon=lon or 0.0,
+            geographic_coverage="Ungeolocated SAR scene" if lat is None or lon is None else f"{lat:.4f}, {lon:.4f}",
+            processing_status="Classification completed; segmentation unavailable",
+            is_real_data=True,
+            data_label="REAL DATA (CLASSIFIED)",
+            metadata_json=json.dumps({
+                "filename": filename,
+                "size_bytes": len(content),
+                "classification": "oil_spill",
+                "confidence": float(classification.get("confidence", 0.0)),
+                "raw_probability": float(classification.get("raw_score", 0.0)),
+                "segmentation_status": "unavailable",
+            }),
+        )
+        db.add(sat_ds)
+        db.commit()
+        db.refresh(sat_ds)
+        return {
+            "success": True,
+            "status": "partial",
+            "classification": {
+                "label": "oil_spill",
+                "confidence": float(classification.get("confidence", 0.0)),
+                "raw_probability": float(classification.get("raw_score", 0.0)),
+            },
+            "segmentation": {
+                "status": "unavailable",
+                "reason": MODEL_STATUS.get("segmentation_message", "Segmentation model is unavailable."),
+            },
+            "scan": {
+                "dataset_id": sat_ds.id,
+                "filename": filename,
+                "image_url": f"/uploads/{saved_filename}",
+                "size_bytes": len(content),
+            },
+            "processing_time_seconds": None,
+        }
     
     # 1. Process image & detect spill
     proc_result = process_satellite_image(
@@ -1019,6 +1156,11 @@ async def upload_satellite_image(
         "attributed_vessels": attributed_list,
         "external_api": external_api_result,
         "data_label": proc_result["data_label"]
+        ,"classification": {
+            "label": "oil_spill",
+            "confidence": float(classification.get("confidence", 0.0)),
+            "raw_probability": float(classification.get("raw_score", 0.0)),
+        }
     }
 
 # ==========================================

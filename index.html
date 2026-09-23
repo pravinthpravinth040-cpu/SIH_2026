@@ -1538,6 +1538,75 @@
             color: var(--yellow);
             border: 1px solid rgba(255, 181, 46, 0.4);
         }
+
+        .ops-status-rail {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 22px;
+        }
+
+        .ops-status {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 11px 13px;
+            background: rgba(11, 29, 44, .76);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--muted);
+            font-size: 11px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .ops-status strong { color: var(--text); font-size: 12px; letter-spacing: 0; }
+        .ops-status .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--yellow); box-shadow: 0 0 10px currentColor; }
+        .ops-status.ready .status-dot { background: var(--green); color: var(--green); }
+        .ops-status.error .status-dot { background: var(--red); color: var(--red); }
+
+        .analysis-result {
+            display: grid;
+            grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr);
+            gap: 18px;
+            margin-top: 18px;
+        }
+
+        .result-visual, .result-summary {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 18px;
+        }
+
+        .result-visual img { width: 100%; max-height: 340px; object-fit: contain; border-radius: 9px; background: #04101a; }
+        .result-tabs { display: flex; gap: 7px; margin-bottom: 12px; }
+        .result-tab { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 7px; padding: 7px 10px; cursor: pointer; font-size: 11px; }
+        .result-tab.active { color: var(--cyan); border-color: var(--cyan); background: rgba(32, 200, 245, .08); }
+        .result-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 15px; }
+        .result-title h3 { font-size: 16px; }
+        .result-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .result-metric { padding: 11px; background: #071724; border: 1px solid var(--border); border-radius: 9px; }
+        .result-metric label { display: block; color: var(--muted); font-size: 10px; letter-spacing: .08em; margin-bottom: 5px; }
+        .result-metric strong { font-size: 16px; }
+        .upload-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 11px; margin-top: 12px; }
+
+        @media (max-width: 800px) {
+            .ops-status-rail, .analysis-result { grid-template-columns: 1fr; }
+            .sidebar { width: 220px; }
+            .main { margin-left: 220px; width: calc(100% - 220px); }
+            .topbar, .content { padding-left: 20px; padding-right: 20px; }
+        }
+
+        @media (max-width: 620px) {
+            .sidebar { position: static; width: 100%; min-height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+            .app { display: block; }
+            .main { margin-left: 0; width: 100%; }
+            .system-box { position: static; margin-top: 18px; }
+            .topbar { height: auto; padding-top: 18px; padding-bottom: 18px; gap: 12px; align-items: flex-start; }
+            .topbar .avatar, .topbar .btn { display: none; }
+            .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
     </style>
 
 </head>
@@ -1551,7 +1620,7 @@
         <aside class="sidebar">
 
             <div class="logo">
-                BLUE<span>FORENSIC</span>
+                SPILL<span>WATCH AI</span>
             </div>
 
             <div class="menu-title">MONITORING</div>
@@ -1627,8 +1696,8 @@
 
                 <div>
                     <div class="platform-title" style="display:flex;align-items:center;gap:12px">
-                        <span>Oil Spill Monitoring</span>
-                        <span id="activeOriginBadge" class="data-origin-tag real">● REAL DATA</span>
+                        <span>Marine Intelligence / Satellite Operations Center</span>
+                        <span id="activeOriginBadge" class="data-origin-tag real">● LIVE DATA</span>
                     </div>
                     <div class="platform-sub">
                         AI-powered maritime surveillance & vessel attribution platform
@@ -1643,7 +1712,7 @@
 
                     <span class="top-status" id="topStatusTag">
                         <span class="dot" id="rtLiveDot"></span>
-                        API GATEWAY ONLINE
+                            API STATUS UNKNOWN
                     </span>
 
                     <span class="avatar">OG</span>
@@ -1669,33 +1738,39 @@
                         Monitor satellite imagery, detect oil spills and correlate nearby vessel activity.
                     </p>
 
+                    <div class="ops-status-rail" aria-label="System status">
+                        <div class="ops-status" id="backendStatusCard"><span class="status-dot"></span><span>Backend <strong id="backendStatusValue">CHECKING</strong></span></div>
+                        <div class="ops-status" id="binaryStatusCard"><span class="status-dot"></span><span>Binary model <strong id="binaryStatusValue">CHECKING</strong></span></div>
+                        <div class="ops-status" id="databaseStatusCard"><span class="status-dot"></span><span>Database <strong id="databaseStatusValue">CHECKING</strong></span></div>
+                    </div>
+
 
                     <!-- STATS -->
 
                     <div class="stats">
 
                         <div class="stat-card">
-                            <div class="stat-label">SPILL STATUS</div>
-                            <div class="stat-value red" id="dashSpillStatus">DETECTED</div>
-                            <div class="stat-desc" id="dashSpillDesc">Current detection state</div>
+                            <div class="stat-label">TOTAL SAR SCANS</div>
+                            <div class="stat-value cyan" id="dashTotalScans">—</div>
+                            <div class="stat-desc">Stored analysis records</div>
                         </div>
 
                         <div class="stat-card">
-                            <div class="stat-label">SPILL AREA</div>
-                            <div class="stat-value cyan" id="dashSpillArea">14.7 km²</div>
-                            <div class="stat-desc">Estimated affected area</div>
+                            <div class="stat-label">OIL SPILLS DETECTED</div>
+                            <div class="stat-value red" id="dashSpillsDetected">—</div>
+                            <div class="stat-desc">Classifier-positive scenes</div>
                         </div>
 
                         <div class="stat-card">
-                            <div class="stat-label">VESSEL RISK</div>
-                            <div class="stat-value yellow" id="dashVesselRisk">92%</div>
-                            <div class="stat-desc">Top attribution confidence</div>
+                            <div class="stat-label">CLEAN OCEAN</div>
+                            <div class="stat-value green" id="dashCleanScans">—</div>
+                            <div class="stat-desc">Classifier-negative scenes</div>
                         </div>
 
                         <div class="stat-card">
-                            <div class="stat-label">NEARBY VESSELS</div>
-                            <div class="stat-value" id="dashNearbyVessels">12</div>
-                            <div class="stat-desc">AIS correlated vessels</div>
+                            <div class="stat-label">VESSELS ANALYZED</div>
+                            <div class="stat-value yellow" id="dashVesselsAnalyzed">—</div>
+                            <div class="stat-desc">Distinct AIS records</div>
                         </div>
 
                     </div>
@@ -1786,6 +1861,37 @@
 
                             </label>
 
+                            <div class="upload-meta" id="uploadMeta" aria-live="polite">
+                                <span>File: <strong id="uploadFileName">Not selected</strong></span>
+                                <span>Size: <strong id="uploadFileSize">Not available</strong></span>
+                                <span>Dimensions: <strong id="uploadDimensions">Not available</strong></span>
+                            </div>
+                            <button class="btn btn-primary" id="runAnalysisButton" type="button" style="margin-top:15px;width:100%" disabled>RUN AI ANALYSIS</button>
+
+                        </div>
+
+                        <div class="analysis-result" id="analysisResult" hidden>
+                            <div class="result-visual">
+                                <div class="result-title"><h3>SAR scene outputs</h3><span class="data-origin-tag real">MODEL OUTPUT</span></div>
+                                <div class="result-tabs" role="tablist">
+                                    <button class="result-tab active" type="button" data-result-view="original">Original</button>
+                                    <button class="result-tab" type="button" data-result-view="mask">Mask</button>
+                                    <button class="result-tab" type="button" data-result-view="overlay">Overlay</button>
+                                </div>
+                                <img id="analysisResultImage" alt="Uploaded SAR analysis output">
+                            </div>
+                            <div class="result-summary">
+                                <div class="result-title"><h3 id="analysisDecision">Awaiting analysis</h3><span class="badge low" id="analysisStatus">PENDING</span></div>
+                                <div class="result-grid">
+                                    <div class="result-metric"><label>CONFIDENCE</label><strong id="analysisConfidence">Not Available</strong></div>
+                                    <div class="result-metric"><label>RAW PROBABILITY</label><strong id="analysisProbability">Not Available</strong></div>
+                                    <div class="result-metric"><label>SPILL AREA</label><strong id="analysisArea">Not Available</strong></div>
+                                    <div class="result-metric"><label>PROCESSING TIME</label><strong id="analysisTime">Not Available</strong></div>
+                                    <div class="result-metric"><label>BOUNDING BOX</label><strong id="analysisBounds">Not Available</strong></div>
+                                    <div class="result-metric"><label>AIS CORRELATION</label><strong id="analysisAis">Not Available</strong></div>
+                                </div>
+                                <p id="analysisMessage" style="color:var(--muted);font-size:12px;line-height:1.6;margin-top:15px">Upload a Sentinel-1 SAR image to run the trained classification pipeline.</p>
+                            </div>
                         </div>
 
 
@@ -2884,7 +2990,7 @@ Authorities, fishermen, coastal residents and response teams are advised to moni
                         <div style="display:flex;gap:8px">
                             <button class="btn btn-secondary" style="font-size:12px;padding:7px 12px"
                                 onclick="loadMarineCadastreSampleData()">⚡ Ingest MarineCadastre Data</button>
-                            <a href="http://127.0.0.1:8000/api/marinecadastre/download-sample"
+                            <a href="#" onclick="downloadMarineCadastreSample(event)"
                                 download="marinecadastre_accessais_sample.csv" class="btn btn-secondary"
                                 style="font-size:12px;padding:7px 12px;text-decoration:none;display:inline-flex;align-items:center">⬇
                                 Download CSV Sample</a>
@@ -2996,7 +3102,7 @@ Loading official MarineCadastre AccessAIS report from backend...
                             <div style="display:flex;gap:10px;flex-wrap:wrap">
                                 <button class="btn btn-primary" onclick="loadMarineCadastreSampleData()"
                                     style="font-size:12px">⚡ Ingest MarineCadastre Data</button>
-                                <a href="http://127.0.0.1:8000/api/marinecadastre/download-sample"
+                                <a href="#" onclick="downloadMarineCadastreSample(event)"
                                     download="marinecadastre_accessais_sample.csv" class="btn btn-secondary"
                                     style="font-size:12px;text-decoration:none;display:inline-flex;align-items:center">⬇
                                     Download CSV Sample</a>
@@ -3780,9 +3886,11 @@ Loading official MarineCadastre AccessAIS report from backend...
            CONFIGURATION & MAP STATE
         ===================================================== */
 
-        const API_BASE = "http://127.0.0.1:8000/api";
-        const WS_URL = "ws://127.0.0.1:8000/ws/live";
-        const SSE_URL = "http://127.0.0.1:8000/api/sse/live";
+        const configuredApiBase = (window.SIH_API_BASE_URL || localStorage.getItem("sih_api_base_url") || "").trim().replace(/\/$/, "");
+        const API_BASE = `${configuredApiBase || `${window.location.protocol === "file:" ? "http:" : window.location.protocol}//${window.location.hostname || "127.0.0.1"}:8000`}/api`;
+        const API_ROOT = API_BASE.replace(/\/api$/, "");
+        const WS_URL = `${API_ROOT.replace(/^http/, "ws")}/ws/live`;
+        const SSE_URL = `${API_BASE}/sse/live`;
 
         let currentActiveSpill = null;
         let currentAttributedVessels = [];
@@ -4617,20 +4725,41 @@ Loading official MarineCadastre AccessAIS report from backend...
 
         async function checkBackendAndLoadAll() {
             try {
-                const res = await fetch(`${API_BASE}/dashboard/statistics`);
-                if (!res.ok) throw new Error("Backend response not OK");
-                const data = await res.json();
+                const [healthRes, statsRes] = await Promise.all([
+                    fetch(`${API_ROOT}/health`),
+                    fetch(`${API_BASE}/dashboard/statistics`)
+                ]);
+                if (!healthRes.ok || !statsRes.ok) throw new Error("Backend response not OK");
+                const health = await healthRes.json();
+                const data = await statsRes.json();
 
                 isBackendOnline = true;
                 updateSystemStatusUI(true);
+                renderHealthStatus(health);
                 renderDashboardData(data);
-                showToast("Connected to OceanGuard FastAPI Backend.");
+                showToast("Connected to SpillWatch AI services.");
             } catch (err) {
                 console.warn("Backend offline or unreachable, using local fallback state:", err);
                 isBackendOnline = false;
                 updateSystemStatusUI(false);
-                showToast("Backend offline. Running in Demo Mode.");
+                renderHealthStatus(null);
+                showToast("Backend offline. No live analysis data is available.");
             }
+        }
+
+        function renderHealthStatus(health) {
+            const statuses = [
+                ["backendStatusCard", "backendStatusValue", health ? "ONLINE" : "OFFLINE", Boolean(health)],
+                ["binaryStatusCard", "binaryStatusValue", health?.models?.binary === "ready" ? "READY" : "ERROR", health?.models?.binary === "ready"],
+                ["databaseStatusCard", "databaseStatusValue", (health?.supabase === "connected" || health?.supabase === "unconfigured") ? health.supabase.toUpperCase() : "OFFLINE", health?.supabase === "connected"]
+            ];
+            statuses.forEach(([cardId, valueId, value, ready]) => {
+                const card = document.getElementById(cardId);
+                const label = document.getElementById(valueId);
+                if (card) card.classList.toggle("ready", ready);
+                if (card) card.classList.toggle("error", !ready);
+                if (label) label.textContent = value;
+            });
         }
 
         function updateSystemStatusUI(online) {
@@ -4656,6 +4785,11 @@ Loading official MarineCadastre AccessAIS report from backend...
 
         function renderDashboardData(data) {
             if (!data) return;
+
+            rtSetEl("dashTotalScans", data.total_satellite_images ?? "—");
+            rtSetEl("dashSpillsDetected", data.total_spills_detected ?? "—");
+            rtSetEl("dashCleanScans", data.total_clean_scans ?? "—");
+            rtSetEl("dashVesselsAnalyzed", data.total_ais_vessels_analyzed ?? "—");
 
             // Stat Cards
             const spillStatusEl = document.getElementById("dashSpillStatus");
@@ -5204,14 +5338,79 @@ Loading official MarineCadastre AccessAIS report from backend...
         async function handleSatelliteFileUpload(file) {
             if (!file) return;
 
-            showToast("Uploading Sentinel-1 SAR image to backend AI pipeline...");
+            window.selectedSarFile = file;
+            updateUploadMetadata(file);
+            const runButton = document.getElementById("runAnalysisButton");
+            if (runButton) runButton.disabled = false;
+            showToast(`Loaded ${file.name}. Ready for trained model analysis.`);
+        }
+
+        function updateUploadMetadata(file) {
+            const name = document.getElementById("uploadFileName");
+            const size = document.getElementById("uploadFileSize");
+            const dimensions = document.getElementById("uploadDimensions");
+            if (name) name.textContent = file.name;
+            if (size) size.textContent = `${(file.size / 1024).toFixed(1)} KB`;
+            if (dimensions) {
+                const image = new Image();
+                image.onload = () => { dimensions.textContent = `${image.naturalWidth} x ${image.naturalHeight} px`; };
+                image.onerror = () => { dimensions.textContent = "Not available"; };
+                image.src = URL.createObjectURL(file);
+            }
+        }
+
+        function setAnalysisResultImage(view) {
+            const image = document.getElementById("analysisResultImage");
+            const result = window.latestAnalysisResult;
+            if (!image || !result) return;
+            const urls = {
+                original: result.scan?.image_url || result.image?.original_url,
+                mask: result.segmentation?.mask_url,
+                overlay: result.segmentation?.overlay_url
+            };
+            const url = urls[view];
+            image.src = url ? `${API_ROOT}${url}` : "";
+            image.alt = `${view} SAR analysis view`;
+            image.style.display = url ? "block" : "none";
+            if (!url) image.parentElement.insertAdjacentHTML("beforeend", `<p style="color:var(--muted);font-size:12px">${view === "original" ? "Image unavailable" : "Segmentation output not available from the current model service."}</p>`);
+        }
+
+        function renderAnalysisResult(result) {
+            window.latestAnalysisResult = result;
+            const panel = document.getElementById("analysisResult");
+            if (panel) panel.hidden = false;
+            const classification = result.classification || {};
+            const segmentation = result.segmentation || {};
+            const detected = classification.label === "oil_spill";
+            const decision = document.getElementById("analysisDecision");
+            const status = document.getElementById("analysisStatus");
+            if (decision) decision.textContent = detected ? "OIL SPILL DETECTED" : "NO OIL SPILL DETECTED";
+            if (status) { status.textContent = result.status || "COMPLETED"; status.className = `badge ${detected ? "high" : "low"}`; }
+            const confidence = Number(classification.confidence);
+            const probability = Number(classification.raw_probability);
+            document.getElementById("analysisConfidence").textContent = Number.isFinite(confidence) ? `${(confidence * 100).toFixed(2)}%` : "Not Available";
+            document.getElementById("analysisProbability").textContent = Number.isFinite(probability) ? probability.toFixed(4) : "Not Available";
+            document.getElementById("analysisArea").textContent = Number.isFinite(Number(segmentation.spill_area)) && detected ? `${segmentation.spill_area} km²` : "Not Available";
+            document.getElementById("analysisTime").textContent = result.processing_time_seconds ? `${result.processing_time_seconds}s` : "Not Available";
+            document.getElementById("analysisBounds").textContent = Object.keys(segmentation.bounding_box || {}).length ? "Available" : "Not Available";
+            document.getElementById("analysisAis").textContent = result.attributed_vessels ? `${result.attributed_vessels.length} records` : "Not Available";
+            document.getElementById("analysisMessage").textContent = segmentation.reason || (detected ? "Classification completed. Segmentation and vessel correlation are shown when available." : "The trained binary classifier found no oil spill in this scene.");
+            setAnalysisResultImage("original");
+        }
+
+        async function runSelectedSarAnalysis() {
+            const file = window.selectedSarFile;
+            if (!file) return;
+            const button = document.getElementById("runAnalysisButton");
+            if (button) { button.disabled = true; button.textContent = "ANALYZING..."; }
+            showToast("Uploading, validating, and running trained SAR models...");
             animatePipelineProgress();
 
             const formData = new FormData();
             formData.append("file", file);
 
             try {
-                const res = await fetch(`${API_BASE}/detection/run`, {
+                const res = await fetch(`${API_BASE}/upload/satellite`, {
                     method: "POST",
                     body: formData
                 });
@@ -5221,19 +5420,20 @@ Loading official MarineCadastre AccessAIS report from backend...
                     throw new Error(error.detail || "Satellite analysis failed");
                 }
                 const result = await res.json();
-
-                // Refresh live state
+                renderAnalysisResult(result);
                 await checkBackendAndLoadAll();
-                if (result.classification.label === "oil_spill") {
-                    goToPage("map");
-                    showToast(`Oil spill detected (${(result.classification.confidence * 100).toFixed(1)}% confidence).`);
-                } else {
-                    showToast(`Clean ocean classified (${(result.classification.confidence * 100).toFixed(1)}% confidence).`);
-                }
+                showToast(result.classification?.label === "oil_spill" ? "Oil spill classification completed." : "Clean ocean classification completed.");
             } catch (err) {
                 console.error("Upload error:", err);
                 showToast(err.message || "Error processing satellite image on backend.");
+            } finally {
+                if (button) { button.disabled = !window.selectedSarFile; button.textContent = "RUN AI ANALYSIS"; }
             }
+        }
+
+        function downloadMarineCadastreSample(event) {
+            event.preventDefault();
+            window.open(`${API_BASE}/marinecadastre/download-sample`, "_blank");
         }
 
         async function handleAISFileUpload(file) {
@@ -5299,6 +5499,13 @@ Loading official MarineCadastre AccessAIS report from backend...
                 if (this.files[0]) handleSatelliteFileUpload(this.files[0]);
             });
         }
+
+        document.getElementById("runAnalysisButton")?.addEventListener("click", runSelectedSarAnalysis);
+        document.querySelectorAll("[data-result-view]").forEach(tab => tab.addEventListener("click", () => {
+            document.querySelectorAll("[data-result-view]").forEach(item => item.classList.remove("active"));
+            tab.classList.add("active");
+            setAnalysisResultImage(tab.dataset.resultView);
+        }));
 
         const imageInput2 = document.getElementById("imageInput2");
         if (imageInput2) {
@@ -5598,7 +5805,7 @@ Incident: ${currentActiveSpill ? currentActiveSpill.spill_id : 'OG-2026-0825-001
             }
 
             try {
-                const res = await fetch("http://127.0.0.1:8000/api/v1/webhooks/satellite", {
+                const res = await fetch(`${API_BASE}/v1/webhooks/satellite`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
